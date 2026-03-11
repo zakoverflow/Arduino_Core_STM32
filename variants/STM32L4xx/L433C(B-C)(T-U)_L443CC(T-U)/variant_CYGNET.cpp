@@ -101,6 +101,15 @@ WEAK void SystemClock_Config(void)
   RCC_ClkInitTypeDef RCC_ClkInitStruct = {};
   RCC_PeriphCLKInitTypeDef PeriphClkInit = {};
 
+  /** Enable PWR peripheral clock
+  *
+  * RM0394 §5.1.2: PWR registers are on APB1. PWREN (RCC_APB1ENR1 bit 28)
+  * resets to 1, so this is defensive rather than strictly necessary, but
+  * required for correctness if PWREN has been cleared by prior code.
+  * CubeMX generates this unconditionally for all STM32L4 projects.
+  */
+  __HAL_RCC_PWR_CLK_ENABLE();
+
   /** Configure the main internal regulator output voltage
   */
   if (HAL_PWREx_ControlVoltageScaling(PWR_REGULATOR_VOLTAGE_SCALE1) != HAL_OK) {
@@ -108,9 +117,14 @@ WEAK void SystemClock_Config(void)
   }
 
   /** Configure LSE Drive Capability
+  *
+  * Use MEDIUMLOW (not LOW): RCC_LSEDRIVE_LOW risks marginal LSE startup
+  * on units near the crystal ESR tolerance limit and degrades MSI PLL mode
+  * (MSIPLLEN) lock quality. ST recommends MEDIUMLOW as the minimum when
+  * MSIPLLEN is in use.
   */
   HAL_PWR_EnableBkUpAccess();
-  __HAL_RCC_LSEDRIVE_CONFIG(RCC_LSEDRIVE_LOW);
+  __HAL_RCC_LSEDRIVE_CONFIG(RCC_LSEDRIVE_MEDIUMLOW);
 
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
@@ -122,9 +136,12 @@ WEAK void SystemClock_Config(void)
   RCC_OscInitStruct.MSIState = RCC_MSI_ON;
   RCC_OscInitStruct.MSICalibrationValue = RCC_MSICALIBRATION_DEFAULT;
   RCC_OscInitStruct.MSIClockRange = RCC_MSIRANGE_11;
-  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
-  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+  /* HSI is not used as SYSCLK source, PLL input, or USB/MSIPLLEN reference.
+   * Disabling it saves ~200-300 µA. The HAL will reject this if HSI is
+   * currently driving SYSCLK or the PLL, providing a safe guard. */
+  RCC_OscInitStruct.HSIState = RCC_HSI_OFF;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_NONE;
+  /* Blocks until LSERDY is set. MSIPLLEN must not be enabled before this. */
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK) {
     Error_Handler();
   }
@@ -142,21 +159,36 @@ WEAK void SystemClock_Config(void)
     Error_Handler();
   }
 
-  /** Initializes the Peripheral clocks
+  /** Enable MSI Auto calibration
+  *
+  * Called before HAL_RCCEx_PeriphCLKConfig so that when PeriphCLKConfig
+  * processes RCC_PERIPHCLK_USB it invokes HAL_RCCEx_EnableMSIPLLMode()
+  * internally against an already-active MSIPLLEN — making that internal
+  * call a safe no-op (LSERDY check passes, bit already set, MSIRDY already
+  * asserted). Without this pre-call, PeriphCLKConfig would be the first to
+  * set MSIPLLEN before LSE has stabilised, causing MSI to transiently lose
+  * MSIRDY and deadlocking the MSIRDY spin-wait. That deadlock freezes
+  * SysTick (SYSCLK = MSI), prevents HAL_GetTick() from advancing, and
+  * leaves the I2C peripheral in a corrupted state that permanently hangs
+  * Wire.begin() after the watchdog resets the MCU.
+  *
+  * LSERDY is guaranteed by HAL_RCC_OscConfig() above, so this call passes
+  * its LSERDY guard and the MSIRDY wait resolves immediately.
   */
-  PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_USB | RCC_PERIPHCLK_SDMMC1
-                                       | RCC_PERIPHCLK_ADC /* | RCC_PERIPHCLK_OSPI */;
+  HAL_RCCEx_EnableMSIPLLMode();
+
+  /** Initializes the Peripheral clocks
+  *
+  * RCC_CCIPR.CLK48SEL (USB clock source) lives in the VDD domain and is
+  * safe to write unconditionally regardless of VBUS state. USB will be
+  * correctly configured whether present at boot or hot-plugged later.
+  */
+  PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_USB | RCC_PERIPHCLK_ADC;
   PeriphClkInit.AdcClockSelection = RCC_ADCCLKSOURCE_SYSCLK;
-  // PeriphClkInit.OspiClockSelection = RCC_OSPICLKSOURCE_SYSCLK;
   PeriphClkInit.UsbClockSelection = RCC_USBCLKSOURCE_MSI;
-  PeriphClkInit.Sdmmc1ClockSelection = RCC_SDMMC1CLKSOURCE_MSI;
   if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK) {
     Error_Handler();
   }
-
-  /** Enable MSI Auto calibration
-  */
-  HAL_RCCEx_EnableMSIPLLMode();
 
   /** Ensure that MSI is wake-up system clock
   */
