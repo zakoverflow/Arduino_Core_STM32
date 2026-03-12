@@ -180,6 +180,9 @@ WEAK void SystemClock_Config(void)
   {
     uint32_t tickstart = HAL_GetTick();
     while (__HAL_RCC_GET_FLAG(RCC_FLAG_MSIRDY) == 0U) {
+      /* 2U matches MSI_TIMEOUT_VALUE from stm32l4xx_hal_rcc.c, but that
+       * symbol is a private #define in the .c file and is not exposed in
+       * any header, so we cannot reference it here directly. */
       if ((HAL_GetTick() - tickstart) > 2U) {
         Error_Handler();
       }
