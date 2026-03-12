@@ -130,6 +130,18 @@ WEAK void SystemClock_Config(void)
   HAL_PWR_EnableBkUpAccess();
   __HAL_RCC_LSEDRIVE_CONFIG(RCC_LSEDRIVE_MEDIUMLOW);
 
+  /** Enable MSI Auto calibration
+  *
+  * Set MSIPLLEN before calling HAL_RCC_OscConfig(). Hardware protection
+  * prevents MSIPLLEN from taking effect until LSERDY=1, so setting it here
+  * is safe. When HAL_RCC_OscConfig() enables LSE and LSERDY asserts, MSIPLL
+  * mode activates automatically: MSI briefly deasserts MSIRDY while it
+  * re-locks to LSE, then reasserts it. This transient happens inside the
+  * remaining execution of HAL_RCC_OscConfig(), so by the time that function
+  * returns, MSIRDY is already stable — no separate wait needed.
+  */
+  HAL_RCCEx_EnableMSIPLLMode();
+
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
@@ -145,7 +157,8 @@ WEAK void SystemClock_Config(void)
    * currently driving SYSCLK or the PLL, providing a safe guard. */
   RCC_OscInitStruct.HSIState = RCC_HSI_OFF;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_NONE;
-  /* Blocks until LSERDY is set. MSIPLLEN must not be enabled before this. */
+  /* Blocks until LSERDY is set. Once LSERDY asserts, MSIPLL activates and
+   * MSI re-locks. MSIRDY is stable again before this function returns. */
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK) {
     Error_Handler();
   }
@@ -161,32 +174,6 @@ WEAK void SystemClock_Config(void)
   RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
   if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK) {
     Error_Handler();
-  }
-
-  /** Enable MSI Auto calibration
-  *
-  * HAL_RCCEx_EnableMSIPLLMode() sets MSIPLLEN so that MSI is automatically
-  * trimmed against LSE, improving 48 MHz accuracy for USB. Setting MSIPLLEN
-  * causes MSI to briefly deassert MSIRDY while it re-locks to LSE. The HAL
-  * function returns immediately without waiting for MSIRDY to reassert, so
-  * we spin here explicitly before proceeding. Without this wait, any
-  * subsequent HAL call that checks MSIRDY (including HAL_RCCEx_PeriphCLKConfig
-  * for USB) may observe MSIRDY=0, time out via HAL_GetTick(), and leave the
-  * system clock in a corrupted state that permanently hangs Wire.begin().
-  *
-  * LSERDY is guaranteed by HAL_RCC_OscConfig() above.
-  */
-  HAL_RCCEx_EnableMSIPLLMode();
-  {
-    uint32_t tickstart = HAL_GetTick();
-    while (__HAL_RCC_GET_FLAG(RCC_FLAG_MSIRDY) == 0U) {
-      /* 2U matches MSI_TIMEOUT_VALUE from stm32l4xx_hal_rcc.c, but that
-       * symbol is a private #define in the .c file and is not exposed in
-       * any header, so we cannot reference it here directly. */
-      if ((HAL_GetTick() - tickstart) > 2U) {
-        Error_Handler();
-      }
-    }
   }
 
   /** Initializes the Peripheral clocks
