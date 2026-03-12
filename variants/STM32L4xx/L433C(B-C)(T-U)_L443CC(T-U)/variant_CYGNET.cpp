@@ -196,7 +196,7 @@ WEAK void SystemClock_Config(void)
 
   /** Ensure that MSI is wake-up system clock
   */
-  __HAL_RCC_WAKEUPSTOP_CLK_CONFIG(RCC_STOP_WAKEUPCLOCK_MSI);
+  HAL_RCCEx_WakeUpStopCLKConfig(RCC_STOP_WAKEUPCLOCK_MSI);
 }
 
 #ifdef __cplusplus
