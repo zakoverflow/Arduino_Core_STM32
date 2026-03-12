@@ -122,6 +122,10 @@ WEAK void SystemClock_Config(void)
   * on units near the crystal ESR tolerance limit and degrades MSI PLL mode
   * (MSIPLLEN) lock quality. ST recommends MEDIUMLOW as the minimum when
   * MSIPLLEN is in use.
+  *
+  * Backup domain access must be enabled before configuring LSE or selecting
+  * the RTC clock source, as those registers (RCC->BDCR) are write-protected
+  * after reset and silently ignore writes until the lock is cleared.
   */
   HAL_PWR_EnableBkUpAccess();
   __HAL_RCC_LSEDRIVE_CONFIG(RCC_LSEDRIVE_MEDIUMLOW);
