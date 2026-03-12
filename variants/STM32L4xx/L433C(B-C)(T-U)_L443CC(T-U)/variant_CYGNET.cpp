@@ -165,21 +165,26 @@ WEAK void SystemClock_Config(void)
 
   /** Enable MSI Auto calibration
   *
-  * Called before HAL_RCCEx_PeriphCLKConfig so that when PeriphCLKConfig
-  * processes RCC_PERIPHCLK_USB it invokes HAL_RCCEx_EnableMSIPLLMode()
-  * internally against an already-active MSIPLLEN — making that internal
-  * call a safe no-op (LSERDY check passes, bit already set, MSIRDY already
-  * asserted). Without this pre-call, PeriphCLKConfig would be the first to
-  * set MSIPLLEN before LSE has stabilised, causing MSI to transiently lose
-  * MSIRDY and deadlocking the MSIRDY spin-wait. That deadlock freezes
-  * SysTick (SYSCLK = MSI), prevents HAL_GetTick() from advancing, and
-  * leaves the I2C peripheral in a corrupted state that permanently hangs
-  * Wire.begin() after the watchdog resets the MCU.
+  * HAL_RCCEx_EnableMSIPLLMode() sets MSIPLLEN so that MSI is automatically
+  * trimmed against LSE, improving 48 MHz accuracy for USB. Setting MSIPLLEN
+  * causes MSI to briefly deassert MSIRDY while it re-locks to LSE. The HAL
+  * function returns immediately without waiting for MSIRDY to reassert, so
+  * we spin here explicitly before proceeding. Without this wait, any
+  * subsequent HAL call that checks MSIRDY (including HAL_RCCEx_PeriphCLKConfig
+  * for USB) may observe MSIRDY=0, time out via HAL_GetTick(), and leave the
+  * system clock in a corrupted state that permanently hangs Wire.begin().
   *
-  * LSERDY is guaranteed by HAL_RCC_OscConfig() above, so this call passes
-  * its LSERDY guard and the MSIRDY wait resolves immediately.
+  * LSERDY is guaranteed by HAL_RCC_OscConfig() above.
   */
   HAL_RCCEx_EnableMSIPLLMode();
+  {
+    uint32_t tickstart = HAL_GetTick();
+    while (READ_BIT(RCC->CR, RCC_CR_MSIRDY) == 0U) {
+      if ((HAL_GetTick() - tickstart) > 2U) {
+        Error_Handler();
+      }
+    }
+  }
 
   /** Initializes the Peripheral clocks
   *
