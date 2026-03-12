@@ -178,13 +178,15 @@ WEAK void SystemClock_Config(void)
 
   /** Initializes the Peripheral clocks
   *
-  * RCC_CCIPR.CLK48SEL (USB clock source) lives in the VDD domain and is
-  * safe to write unconditionally regardless of VBUS state. USB will be
-  * correctly configured whether present at boot or hot-plugged later.
+  * USB clock source is intentionally omitted here. Configuring
+  * RCC_PERIPHCLK_USB via HAL_RCCEx_PeriphCLKConfig hangs the MCU when USB
+  * is not physically present (battery-powered operation), leaving the I2C
+  * peripheral in a corrupted state after watchdog reset. The Arduino USB
+  * stack configures the USB clock when it initializes on VBUS detection, so
+  * omitting it here has no impact on USB serial functionality.
   */
-  PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_ADC | RCC_PERIPHCLK_USB;
+  PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_ADC;
   PeriphClkInit.AdcClockSelection = RCC_ADCCLKSOURCE_SYSCLK;
-  PeriphClkInit.UsbClockSelection = RCC_USBCLKSOURCE_MSI;
   if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK) {
     Error_Handler();
   }
