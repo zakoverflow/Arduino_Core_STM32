@@ -119,9 +119,8 @@ WEAK void SystemClock_Config(void)
   /** Configure LSE Drive Capability
   *
   * Use MEDIUMLOW (not LOW): RCC_LSEDRIVE_LOW risks marginal LSE startup
-  * on units near the crystal ESR tolerance limit and degrades MSI PLL mode
-  * (MSIPLLEN) lock quality. ST recommends MEDIUMLOW as the minimum when
-  * MSIPLLEN is in use.
+  * on units near the crystal ESR tolerance limit. ST recommends MEDIUMLOW
+  * as a safe minimum for reliable LSE startup across production units.
   *
   * Backup domain access must be enabled before configuring LSE or selecting
   * the RTC clock source, as those registers (RCC->BDCR) are write-protected
@@ -130,35 +129,26 @@ WEAK void SystemClock_Config(void)
   HAL_PWR_EnableBkUpAccess();
   __HAL_RCC_LSEDRIVE_CONFIG(RCC_LSEDRIVE_MEDIUMLOW);
 
-  /** Enable MSI Auto calibration
-  *
-  * Set MSIPLLEN before calling HAL_RCC_OscConfig(). Hardware protection
-  * prevents MSIPLLEN from taking effect until LSERDY=1, so setting it here
-  * is safe. When HAL_RCC_OscConfig() enables LSE and LSERDY asserts, MSIPLL
-  * mode activates automatically: MSI briefly deasserts MSIRDY while it
-  * re-locks to LSE, then reasserts it. This transient happens inside the
-  * remaining execution of HAL_RCC_OscConfig(), so by the time that function
-  * returns, MSIRDY is already stable — no separate wait needed.
-  */
-  HAL_RCCEx_EnableMSIPLLMode();
-
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
   RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_LSE
                                      | RCC_OSCILLATORTYPE_MSI
-                                     | RCC_OSCILLATORTYPE_HSI;
+                                     | RCC_OSCILLATORTYPE_HSI
+                                     | RCC_OSCILLATORTYPE_HSI48;
   RCC_OscInitStruct.LSEState = RCC_LSE_ON;
   RCC_OscInitStruct.MSIState = RCC_MSI_ON;
   RCC_OscInitStruct.MSICalibrationValue = RCC_MSICALIBRATION_DEFAULT;
   RCC_OscInitStruct.MSIClockRange = RCC_MSIRANGE_11;
-  /* HSI is not used as SYSCLK source, PLL input, or USB/MSIPLLEN reference.
+  /* HSI is not used as SYSCLK source, PLL input, or USB reference.
    * Disabling it saves ~200-300 µA. The HAL will reject this if HSI is
    * currently driving SYSCLK or the PLL, providing a safe guard. */
   RCC_OscInitStruct.HSIState = RCC_HSI_OFF;
+  /* HSI48 is a dedicated 48 MHz RC oscillator used as the USB clock source.
+   * Using HSI48 for USB keeps the USB clock independent of MSI, avoiding
+   * any interaction between MSIPLL calibration and system clock stability. */
+  RCC_OscInitStruct.HSI48State = RCC_HSI48_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_NONE;
-  /* Blocks until LSERDY is set. Once LSERDY asserts, MSIPLL activates and
-   * MSI re-locks. MSIRDY is stable again before this function returns. */
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK) {
     Error_Handler();
   }
@@ -178,13 +168,19 @@ WEAK void SystemClock_Config(void)
 
   /** Initializes the Peripheral clocks
   *
-  * RCC_CCIPR.CLK48SEL (USB clock source) lives in the VDD domain and is
-  * safe to write unconditionally regardless of VBUS state. USB will be
-  * correctly configured whether present at boot or hot-plugged later.
+  * USB clock source is HSI48 — a dedicated 48 MHz oscillator independent of
+  * MSI. RCC_CCIPR.CLK48SEL lives in the VDD domain and is safe to write
+  * unconditionally regardless of VBUS state. USB will be correctly configured
+  * whether present at boot or hot-plugged later.
+  *
+  * NOTE: HSI48 alone is ±3%, outside USB full-speed spec (±0.25%). Full
+  * accuracy requires CRS (Clock Recovery System) locked to USB SOF, which
+  * the USB stack enables after enumeration. For analysis purposes only —
+  * see power consumption tradeoff discussion before merging.
   */
   PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_ADC | RCC_PERIPHCLK_USB;
   PeriphClkInit.AdcClockSelection = RCC_ADCCLKSOURCE_SYSCLK;
-  PeriphClkInit.UsbClockSelection = RCC_USBCLKSOURCE_MSI;
+  PeriphClkInit.UsbClockSelection = RCC_USBCLKSOURCE_HSI48;
   if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK) {
     Error_Handler();
   }
