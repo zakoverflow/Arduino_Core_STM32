@@ -179,7 +179,7 @@ WEAK void SystemClock_Config(void)
   HAL_RCCEx_EnableMSIPLLMode();
   {
     uint32_t tickstart = HAL_GetTick();
-    while (READ_BIT(RCC->CR, RCC_CR_MSIRDY) == 0U) {
+    while (__HAL_RCC_GET_FLAG(RCC_FLAG_MSIRDY) == 0U) {
       if ((HAL_GetTick() - tickstart) > 2U) {
         Error_Handler();
       }
