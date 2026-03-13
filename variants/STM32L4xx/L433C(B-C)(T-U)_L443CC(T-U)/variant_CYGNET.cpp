@@ -144,7 +144,7 @@ WEAK void SystemClock_Config(void)
   *
   * Key differences from the previous Cygnet config:
   *   - MSI: MSIRANGE_11 (48 MHz) → MSIRANGE_6 (4 MHz) — used as PLL input
-  *   - HSI: OFF → ON (consistent with Nucleo; used for LPUART reference)
+  *   - HSI: remains OFF — nothing in this config uses it
   *   - PLL: NONE → ON  (MSI 4 MHz × PLLN=40 / PLLR=2 → SYSCLK = 80 MHz)
   *   - SYSCLK: MSI (48 MHz) → PLLCLK (80 MHz)
   *   - USB clock: removed from PeriphCLKConfig (MSI) → PLLSAI1 (48 MHz)
@@ -154,11 +154,11 @@ WEAK void SystemClock_Config(void)
   *   - FLASH_LATENCY: 2 → 4  (required for 80 MHz / VOS1 per RM0394 §3.3)
   */
   RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_LSE
-                                     | RCC_OSCILLATORTYPE_MSI
-                                     | RCC_OSCILLATORTYPE_HSI;
+                                     | RCC_OSCILLATORTYPE_MSI;
   RCC_OscInitStruct.LSEState = RCC_LSE_ON;
-  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
-  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+  /* HSI is not used as SYSCLK source, PLL/PLLSAI1 input, or any peripheral
+   * clock reference. Disabling it saves ~200-300 µA. */
+  RCC_OscInitStruct.HSIState = RCC_HSI_OFF;
   RCC_OscInitStruct.MSIState = RCC_MSI_ON;
   RCC_OscInitStruct.MSICalibrationValue = RCC_MSICALIBRATION_DEFAULT;
   /* MSIRANGE_6 = 4 MHz — same as Nucleo. Low-frequency reference fed into
