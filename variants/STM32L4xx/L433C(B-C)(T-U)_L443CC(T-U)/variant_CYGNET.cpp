@@ -130,68 +130,112 @@ WEAK void SystemClock_Config(void)
   HAL_PWR_EnableBkUpAccess();
   __HAL_RCC_LSEDRIVE_CONFIG(RCC_LSEDRIVE_MEDIUMLOW);
 
-  /** Enable MSI Auto calibration
-  *
-  * Set MSIPLLEN before calling HAL_RCC_OscConfig(). Hardware protection
-  * prevents MSIPLLEN from taking effect until LSERDY=1, so setting it here
-  * is safe. When HAL_RCC_OscConfig() enables LSE and LSERDY asserts, MSIPLL
-  * mode activates automatically: MSI briefly deasserts MSIRDY while it
-  * re-locks to LSE, then reasserts it. This transient happens inside the
-  * remaining execution of HAL_RCC_OscConfig(), so by the time that function
-  * returns, MSIRDY is already stable — no separate wait needed.
-  */
-  HAL_RCCEx_EnableMSIPLLMode();
-
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
+  *
+  * EXPERIMENT: Mirror the Nucleo L432KC clock architecture to test whether
+  * its immunity to the USB-init-without-VBUS hang stems from:
+  *   (a) SYSCLK derived from PLL (not MSI), so SysTick / HAL_GetTick() are
+  *       immune to any MSIPLLEN-induced MSIRDY transient, and
+  *   (b) USB clock sourced from PLLSAI1 (independent PLL), so the HAL
+  *       waits for PLLSAI1RDY — which it can do reliably because SysTick
+  *       is PLL-based — rather than handing the USB peripheral a live MSI
+  *       clock immediately via a plain register write.
+  *
+  * Key differences from the previous Cygnet config:
+  *   - MSI: MSIRANGE_11 (48 MHz) → MSIRANGE_6 (4 MHz) — used as PLL input
+  *   - HSI: OFF → ON (consistent with Nucleo; used for LPUART reference)
+  *   - PLL: NONE → ON  (MSI 4 MHz × PLLN=40 / PLLR=2 → SYSCLK = 80 MHz)
+  *   - SYSCLK: MSI (48 MHz) → PLLCLK (80 MHz)
+  *   - USB clock: removed from PeriphCLKConfig (MSI) → PLLSAI1 (48 MHz)
+  *   - HAL_RCCEx_EnableMSIPLLMode(): moved to AFTER PeriphCLKConfig,
+  *     exactly as the Nucleo does — MSIRDY transient can no longer stall
+  *     SysTick because SYSCLK = PLL, not MSI.
+  *   - FLASH_LATENCY: 2 → 4  (required for 80 MHz / VOS1 per RM0394 §3.3)
   */
   RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_LSE
                                      | RCC_OSCILLATORTYPE_MSI
                                      | RCC_OSCILLATORTYPE_HSI;
   RCC_OscInitStruct.LSEState = RCC_LSE_ON;
+  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
   RCC_OscInitStruct.MSIState = RCC_MSI_ON;
   RCC_OscInitStruct.MSICalibrationValue = RCC_MSICALIBRATION_DEFAULT;
-  RCC_OscInitStruct.MSIClockRange = RCC_MSIRANGE_11;
-  /* HSI is not used as SYSCLK source, PLL input, or USB/MSIPLLEN reference.
-   * Disabling it saves ~200-300 µA. The HAL will reject this if HSI is
-   * currently driving SYSCLK or the PLL, providing a safe guard. */
-  RCC_OscInitStruct.HSIState = RCC_HSI_OFF;
-  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_NONE;
-  /* Blocks until LSERDY is set. Once LSERDY asserts, MSIPLL activates and
-   * MSI re-locks. MSIRDY is stable again before this function returns. */
+  /* MSIRANGE_6 = 4 MHz — same as Nucleo. Low-frequency reference fed into
+   * the main PLL (×40/÷2 = 80 MHz) and PLLSAI1 (×24/÷2 = 48 MHz). */
+  RCC_OscInitStruct.MSIClockRange = RCC_MSIRANGE_6;
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_MSI;
+  RCC_OscInitStruct.PLL.PLLM = 1;
+  RCC_OscInitStruct.PLL.PLLN = 40;
+  RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV7;
+  RCC_OscInitStruct.PLL.PLLQ = RCC_PLLQ_DIV2;
+  RCC_OscInitStruct.PLL.PLLR = RCC_PLLR_DIV2;  /* 4 × 40 / 2 = 80 MHz */
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK) {
     Error_Handler();
   }
 
   /** Initializes the CPU, AHB and APB buses clocks
+  *
+  * SYSCLK = PLLCLK (80 MHz). SysTick and HAL_GetTick() are now driven by
+  * the PLL output, completely decoupled from MSI. Any subsequent MSIRDY
+  * transient (from HAL_RCCEx_EnableMSIPLLMode below) cannot stall SysTick.
   */
   RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK
                                 | RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2;
-  // RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
-  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_MSI;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
   RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
   RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
   RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK) {
+  /* FLASH_LATENCY_4: required for HCLK > 64 MHz at VOS1 (RM0394 §3.3.3) */
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_4) != HAL_OK) {
     Error_Handler();
   }
 
   /** Initializes the Peripheral clocks
   *
-  * USB clock source is intentionally omitted here. Configuring
-  * RCC_PERIPHCLK_USB via HAL_RCCEx_PeriphCLKConfig hangs the MCU when USB
-  * is not physically present (battery-powered operation), leaving the I2C
-  * peripheral in a corrupted state after watchdog reset. The Arduino USB
-  * stack configures the USB clock when it initializes on VBUS detection, so
-  * omitting it here has no impact on USB serial functionality.
+  * USB clock: PLLSAI1 (MSI 4 MHz × PLLSAI1N=24 / PLLSAI1Q=2 = 48 MHz).
+  * This mirrors the Nucleo L432KC exactly. RCCEx_PLLSAI1_Config() waits
+  * for PLLSAI1RDY using HAL_GetTick(). Because SYSCLK is now PLL-based,
+  * HAL_GetTick() is immune to MSI transients — the wait is reliable.
+  * PLLSAI1 and the main PLL share the same source (MSI) and M divider (1),
+  * which the HAL enforces; both are configured consistently here.
+  *
+  * HAL_RCCEx_PeriphCLKConfig writes CLK48SEL first (pointing at PLLSAI1
+  * before it is running), then enables PLLSAI1 and waits for its RDY flag.
+  * During that brief window the USB peripheral has no 48 MHz clock and
+  * stays quiescent — avoiding the race where a live MSI clock is handed
+  * to USB before the peripheral is ready to handle the absence of VBUS.
   */
-  PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_ADC;
+  PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_USB | RCC_PERIPHCLK_ADC;
   PeriphClkInit.AdcClockSelection = RCC_ADCCLKSOURCE_SYSCLK;
+  PeriphClkInit.UsbClockSelection = RCC_USBCLKSOURCE_PLLSAI1;
+  PeriphClkInit.PLLSAI1.PLLSAI1Source = RCC_PLLSOURCE_MSI;
+  PeriphClkInit.PLLSAI1.PLLSAI1M = 1;
+  PeriphClkInit.PLLSAI1.PLLSAI1N = 24;
+  PeriphClkInit.PLLSAI1.PLLSAI1P = RCC_PLLP_DIV7;
+  PeriphClkInit.PLLSAI1.PLLSAI1Q = RCC_PLLQ_DIV2;  /* 4 × 24 / 2 = 48 MHz */
+  PeriphClkInit.PLLSAI1.PLLSAI1R = RCC_PLLR_DIV2;
+  PeriphClkInit.PLLSAI1.PLLSAI1ClockOut = RCC_PLLSAI1_48M2CLK;
   if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK) {
     Error_Handler();
   }
 
+  /** Enable MSI Auto calibration
+  *
+  * Called AFTER PeriphCLKConfig, matching the Nucleo's ordering exactly.
+  * MSIPLLEN causes MSI to transiently lose MSIRDY while it re-locks to
+  * LSE — but SYSCLK is now PLLCLK (80 MHz), so SysTick is unaffected.
+  * The transient cannot stall HAL_GetTick() or deadlock any timeout loop.
+  */
+  HAL_RCCEx_EnableMSIPLLMode();
+
   /** Ensure that MSI is wake-up system clock
+  *
+  * After STOP mode, the PLL is not automatically re-enabled. MSI is used
+  * as the initial wake-up clock; firmware must re-lock the PLL manually
+  * if 80 MHz is required after wake. This is the same behaviour as any
+  * PLL-based design on STM32L4.
   */
   HAL_RCCEx_WakeUpStopCLKConfig(RCC_STOP_WAKEUPCLOCK_MSI);
 }
